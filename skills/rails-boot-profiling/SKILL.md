@@ -202,7 +202,7 @@ Follow this sequence when a user asks about slow boot time:
 1. **Get a baseline.** Run the full profile command prefixed with `time`, and note the wall-clock boot time and the total file count (`| wc -l`).
 
    ```sh
-   bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
+   time bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
    ```
 
 2. **Find the top offenders.** Re-run with `REQUIRE_PROFILE_THRESHOLD` to surface only slow files. Start with a threshold that shows roughly 10-20 entries (e.g., if total boot is ~4s, try 100ms; if ~1s, try 30ms). Report the top slowest entries to the user.
