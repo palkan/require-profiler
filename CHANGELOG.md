@@ -2,6 +2,8 @@
 
 ## master
 
+- Update the skill: cover the Rails initialization, prefixes and refresh the boot-optimization guidance. ([@ardecvz][])
+
 ## 0.3.1 (2026-08-14)
 
 - Rename hyperdrive gemspec metadata keys to a new `rails_hyperdrive_*` contract, so the skill is discoverable again. ([@ardecvz][])

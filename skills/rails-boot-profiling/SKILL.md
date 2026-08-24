@@ -246,11 +246,15 @@ Follow this sequence when a user asks about slow boot time:
    REQUIRE_PROFILE_PATH=tmp/require-profile.json bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
    ```
 
-7. **Suggest actionable improvements** based on findings:
-   - Move heavy gem requires behind lazy loading or autoload
-   - Defer initializer work to `after_initialize` or `to_prepare` callbacks
+7. **Suggest actionable improvements** based on findings. The common offenders:
+   - Move heavy gem requires behind lazy loading or autoload (cloud SDKs, SOAP/PDF/spreadsheet/search clients, and generated API gems are rarely needed across the whole app)
+   - Move CLI and dev-only tooling gems to the right Gemfile group (or `require: false`), and scope process-specific boot files (background consumers, admin UIs) to the processes that need them
+   - Make initializer and `to_prepare` work lazy, resolved on first use and memoized (`to_prepare` also reruns on every dev reload)
+   - Keep routes lazy and drawn once. Rails 8 defers drawing to the first request, and older apps can use the `routes_lazy_routes` gem. Watch for gems forcing redraws (for example, set Devise's `config.reload_routes = false`)
+   - Adopt new framework defaults (`config.load_defaults`, etc.) and keep gems updated, since newer versions regularly ship boot speedups
+   - Defer anything touching I18n until it is configured (early lookups, locale registrations, class-level validation messages)
+   - Delay heavy class-level work in app code or cache what it builds (big DSLs, for example GraphQL schemas, Grape, Active Admin)
    - Replace boot-time HTTP calls with cached configs or async fetches
-   - Split large YAML files or cache parsed results
-   - Consider using `bootsnap` if not already present
+   - Enable `bootsnap` and keep it updated (if you build production images, mind the cache precompilation)
 
-   Verify each fix with a cheap focused run (`REQUIRE_PROFILE_FOCUS` on the touched area). Rerun the full baseline once after a batch of fixes to confirm the total win. Mind where each win lands, since lazy loading moves work from boot to first use, and some fixes speed up development only.
+   Verify each fix with a cheap focused run (`REQUIRE_PROFILE_FOCUS` on the touched area). Rerun the full baseline once after a batch of fixes to confirm the total win. Mind where each win lands, since some fixes speed up development only, and lazy loading moves work from boot to first use (on a production hot path that can grow the tail latency).
