@@ -1,13 +1,13 @@
 ---
 name: rails-boot-profiling
-description: Profile Rails application boot time to find slow requires. Use when the user asks why the app boots slowly, wants to profile boot time, or needs to optimize require/load performance.
+description: Profile Rails application boot time to find slow requires and initializers. Use when the user asks why the app boots slowly, wants to profile boot time, or needs to optimize require/load performance.
 gem: require-profiler
-versions: ">= 0.2"
+versions: ">= 0.3"
 ---
 
 # Rails Boot Time Profiling
 
-Profile Rails application boot time using the require-profiler gem. This skill helps identify which `require`, `load`, YAML, and HTTP calls dominate startup time, and provides tools to drill deeper into slow files.
+Profile Rails application boot time using the require-profiler gem. This skill helps identify which `require`, `load`, YAML, HTTP, and Rails initialization steps dominate startup time, and provides tools to drill deeper into slow files.
 
 ## Prerequisites
 
@@ -89,7 +89,7 @@ REQUIRE_PROFILE_THRESHOLD=50 REQUIRE_PROFILE_FOCUS="initializers" bundle exec ru
 
 By default, require-profiler tracks YAML file loads (`YAML.load_file`, etc.) and adds them to the profile tree. This helps find initializers or gems that parse large YAML configs at boot time.
 
-HTTP request tracking is also available but requires the [sniffer](https://github.com/aderyabin/sniffer) gem to be in the Gemfile. This surfaces any HTTP calls made during boot (e.g., config fetches from remote services, gem activation pings).
+HTTP request tracking is also available but requires the [sniffer](https://github.com/aderyabin/sniffer) gem to be in the Gemfile. HTTP entries appear as `http:`-prefixed lines (e.g., `http:GET:https://...`). This surfaces any HTTP calls made during boot (e.g., config fetches from remote services, gem activation pings).
 
 To disable either:
 
@@ -100,11 +100,23 @@ REQUIRE_PROFILER_YAML=false bundle exec ruby -W0 -r./config/boot -require-prof c
 # Disable HTTP tracking
 REQUIRE_PROFILER_HTTP=false bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
 
-# Disable all plugins (YAML + HTTP)
+# Disable all plugins (YAML, HTTP, and Rails)
 REQUIRE_PROFILER_PLUGINS=false bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
 ```
 
-## Step 4: Deep-Dive with Stackprof
+## Step 4: Check the Rails Initialization Lines
+
+When Rails is loaded, the profiler also captures the Rails initialization pipeline as `rails:`-prefixed lines: `initializer:` (railtie initializers), `to_prepare:` (reload callbacks that rerun on every code reload in development), and `load_hook:` (lazy load hooks such as `ActiveSupport.on_load(:active_record)`).
+
+On large apps, initialization often outweighs the requires themselves, so always check this part of the tree:
+
+```sh
+REQUIRE_PROFILE_FOCUS="rails:" bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
+```
+
+Disable with `REQUIRE_PROFILER_RAILS=false`, or set a threshold if the extra lines add too much noise.
+
+## Step 5: Deep-Dive with Stackprof
 
 When you identify a file that is unexpectedly slow to load, use Stackprof to profile what happens inside that file during `require`:
 
@@ -126,7 +138,7 @@ bundle exec stackprof config-initializers-stripe-stackprof.dump --method 'ClassN
 
 To view in Speedscope, open https://www.speedscope.app/ and drag the `.json` file onto the page (nothing is uploaded — parsing is local).
 
-## Step 5: Export as JSON for Speedscope
+## Step 6: Export as JSON for Speedscope
 
 Generate a Speedscope-compatible JSON profile of the entire boot:
 
@@ -165,6 +177,7 @@ This emits one line per stack in Brendan Gregg's collapsed format with per-frame
 | `REQUIRE_PROFILE_STACKPROF` | File path to deep-profile with Stackprof | `config/initializers/stripe.rb` |
 | `REQUIRE_PROFILER_YAML` | Disable YAML tracking when set to `false` | `false` |
 | `REQUIRE_PROFILER_HTTP` | Disable HTTP tracking when set to `false` | `false` |
+| `REQUIRE_PROFILER_RAILS` | Disable Rails initialization tracking when set to `false` | `false` |
 | `REQUIRE_PROFILER_PLUGINS` | Disable all plugins when set to `false` | `false` |
 
 ## Important: Use the Profiler's Built-in Filtering
@@ -207,14 +220,17 @@ Follow this sequence when a user asks about slow boot time:
    REQUIRE_PROFILE_THRESHOLD=50 REQUIRE_PROFILE_FOCUS="initializers" bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
    ```
 
-4. **Check for boot-time side effects.** YAML and HTTP entries appear in the profile tree by default. HTTP calls during boot are almost always worth investigating — they add latency and can fail. Use `REQUIRE_PROFILE_FOCUS` to find them:
+4. **Check for boot-time side effects.** YAML, HTTP, and Rails initialization entries appear in the profile tree by default. HTTP calls during boot are almost always worth investigating — they add latency and can fail. Use `REQUIRE_PROFILE_FOCUS` to find them:
 
    ```sh
    # Find YAML loading
    REQUIRE_PROFILE_FOCUS="\.yml" bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
 
    # Find HTTP calls during boot
-   REQUIRE_PROFILE_FOCUS="(GET|POST|PATCH|DELETE):" bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
+   REQUIRE_PROFILE_FOCUS="http:" bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
+
+   # Find slow initializers, reload callbacks, and load hooks
+   REQUIRE_PROFILE_FOCUS="rails:" bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
    ```
 
 5. **Deep-dive when needed.** For files that are unexpectedly slow (the load time seems too high for what the file does), use `REQUIRE_PROFILE_STACKPROF` to generate a Stackprof profile and identify what's happening inside that file.
