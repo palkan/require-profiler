@@ -15,16 +15,11 @@ Before profiling, ensure these conditions are met:
 
 1. The `require-profiler` gem is in the Gemfile (at minimum in the development group).
 
-2. Eager loading must be enabled for the environment you are profiling. Check the environment config:
-
-```ruby
-# config/environments/development.rb (or the target environment)
-config.eager_load = true
-```
-
-If `eager_load` is `false`, the profile will miss most application code — only files loaded during boot are captured, and lazy-loaded files will not appear.
+2. Pick the boot to measure with `config.eager_load` in the target environment config: keep it `false` to profile the development boot (lazily-loaded application code stays out of the profile), or set it to `true` to profile a production-like boot (all application code loads and shows up). Default to the development boot unless the user asks about production or CI.
 
 3. Add `-W0` to the Ruby command to suppress warnings and keep output clean.
+
+4. If the app uses Spring, disable it while profiling (`DISABLE_SPRING=1`). Otherwise you measure a fork of a preloaded process instead of a real boot.
 
 ## Step 1: Run a Full Boot Profile
 
@@ -50,6 +45,8 @@ config/environment.rb — 4312.071ms
   config/initializers/stripe.rb — 523.117ms
     stripe (>= 0) — 498.201ms
 ```
+
+The profiler's own setup (require-profiler files and the sniffer gem) appears at the top of the tree. Ignore those lines.
 
 To get a quick count of how many files were loaded:
 
@@ -90,6 +87,8 @@ REQUIRE_PROFILE_THRESHOLD=50 REQUIRE_PROFILE_FOCUS="initializers" bundle exec ru
 By default, require-profiler tracks YAML file loads (`YAML.load_file`, etc.) and adds them to the profile tree. This helps find initializers or gems that parse large YAML configs at boot time.
 
 HTTP request tracking is also available but requires the [sniffer](https://github.com/aderyabin/sniffer) gem to be in the Gemfile. HTTP entries appear as `http:`-prefixed lines (e.g., `http:GET:https://...`). This surfaces any HTTP calls made during boot (e.g., config fetches from remote services, gem activation pings).
+
+Bootsnap caches parsed YAML and serves it back on warm boots, hiding the true parse cost. Run the profile twice: a normal run and a cold rerun with `DISABLE_BOOTSNAP=1`.
 
 To disable either:
 
@@ -138,6 +137,8 @@ bundle exec stackprof config-initializers-stripe-stackprof.dump --method 'ClassN
 
 To view in Speedscope, open https://www.speedscope.app/ and drag the `.json` file onto the page (nothing is uploaded — parsing is local).
 
+When reading the sampled profile, separate *total time* (a frame plus everything it calls) from *self time* (work in the frame's own body). If a frame has a huge total and near-zero self, drill into its children until self time shows up. Native frames (OpenSSL, C extension init, syscalls) never appear in the require tree. Only this step can show them.
+
 ## Step 6: Export as JSON for Speedscope
 
 Generate a Speedscope-compatible JSON profile of the entire boot:
@@ -182,7 +183,7 @@ This emits one line per stack in Brendan Gregg's collapsed format with per-frame
 
 ## Important: Use the Profiler's Built-in Filtering
 
-**Prefer profiler's built-in filtering and searching capabilities over `grep`, `tail`, `head`, `awk`, or `sed` to filter or search results.**:
+**Prefer the profiler's built-in filtering and searching capabilities over `grep`, `tail`, `head`, `awk`, or `sed` to filter or search results:**
 
 - To find slow files → use `REQUIRE_PROFILE_THRESHOLD`, not `grep` for timing patterns
 - To investigate a specific gem or file → use `REQUIRE_PROFILE_FOCUS`, not `grep` for the name
@@ -198,7 +199,7 @@ The only acceptable uses of piping are:
 
 Follow this sequence when a user asks about slow boot time:
 
-1. **Get a baseline.** Run the full profile command and note the total boot time (the top-level entry's duration) and total file count (`| wc -l`).
+1. **Get a baseline.** Run the full profile command prefixed with `time`, and note the wall-clock boot time and the total file count (`| wc -l`).
 
    ```sh
    bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
@@ -223,7 +224,7 @@ Follow this sequence when a user asks about slow boot time:
 4. **Check for boot-time side effects.** YAML, HTTP, and Rails initialization entries appear in the profile tree by default. HTTP calls during boot are almost always worth investigating — they add latency and can fail. Use `REQUIRE_PROFILE_FOCUS` to find them:
 
    ```sh
-   # Find YAML loading
+   # Find YAML loading (rerun with DISABLE_BOOTSNAP=1 — the cache hides parse costs)
    REQUIRE_PROFILE_FOCUS="\.yml" bundle exec ruby -W0 -r./config/boot -require-prof config/environment.rb
 
    # Find HTTP calls during boot
@@ -251,3 +252,5 @@ Follow this sequence when a user asks about slow boot time:
    - Replace boot-time HTTP calls with cached configs or async fetches
    - Split large YAML files or cache parsed results
    - Consider using `bootsnap` if not already present
+
+   Verify each fix with a cheap focused run (`REQUIRE_PROFILE_FOCUS` on the touched area). Rerun the full baseline once after a batch of fixes to confirm the total win. Mind where each win lands, since lazy loading moves work from boot to first use, and some fixes speed up development only.
