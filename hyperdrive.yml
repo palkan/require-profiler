@@ -1,0 +1,2 @@
+gems:
+  - require-profiler: ">= 0.3"
